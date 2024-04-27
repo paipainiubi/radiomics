@@ -1,0 +1,259 @@
+rm(list=ls())#清除所有数???
+
+library(MASS)
+library(openxlsx)
+library(plyr)
+library(glmnet)
+library(stats)
+library(pROC)
+#library(RJDBC)##跑完循环得到种子数后，如果内存溢出则去掉注释
+#options(java.parameters='-Xmx6144m')##跑完循环得到种子数后，如果内存溢出则去掉注释
+#options(java.parameters='-Xms6144m')##跑完循环得到种子数后，如果内存溢出则去掉注释
+library(rJava)
+library(caret)
+library(sampling)
+#library(xlsx)##跑完循环得到种子数后调用
+
+
+data <- read.xlsx("D:\\DESK\\geng\\zhou.xlsx", 1)###调用xlsx包后加上“, sheetIndex = 1”
+
+
+num =5000
+list1 = list()
+list2 = list()
+list3 = list()
+list4 = list()
+list5 = list()
+list6 = list()
+list7 = list()
+
+
+for (seednum in 1:num) {
+  #seednum=635
+  set.seed(seednum)
+  threshold = 0.5
+  # sub_train = strata(data,stratanames="label",
+  #                    size=c(0.67*(nrow(data) - sum(data$label)),0.67*sum(data$label)),
+  #                    method="srswor",description = T)#只有label上面都是1下面都是0才不会报???
+  sub_train = strata(data,stratanames="label",
+                     size=c(2/3*(nrow(data) - sum(data$label)),2/3*sum(data$label)),
+                     method="srswor",description = T)#只有label上面都是1下面都是0才不会报???
+  
+  # sub_train = stratified_sampling(data = data, seednum = seednum, proportion = 2/3)
+  train_sub = sub_train$ID_unit
+  #train_sub <-createDataPartition(y=data$label,p=0.67,list=FALSE)
+  #data <- data[,-2]###这里删了‘path??? 路径
+  data.trn = data[train_sub,]
+  data.test = data[-train_sub,]
+  #write.xlsx(data.trn,'D:\\Postgraduate\\Ying Fan\\Three_model\\EGFR_model_952\\EGFR_train.xlsx')
+  #write.xlsx(data.test,'D:\\Postgraduate\\Ying Fan\\Three_model\\EGFR_model_952\\EGFR_test.xlsx')
+  
+  # write.xlsx(data.trn,'H:/deepfeature/zongjieguo/4train.xlsx')
+  # write.xlsx(data.test,'H:/deepfeature/zongjieguo/4test.xlsx')
+  # write.xlsx(data.trn,'H:/deepfeature/zongjieguo/dproc/train/10_train.xlsx')
+  # write.xlsx(data.test,'H:/deepfeature/zongjieguo/dproc/test/10_test.xlsx')
+  wilcox = c()
+  for (num in 1:length(data.trn)){
+    test <- wilcox.test(data.trn[which(data.trn$label == 0),num], 
+                        data.trn[which(data.trn$label == 1),num])
+    wilcox[num] <- test$p.value
+  }
+  
+  data.trn <- data.trn[,which(wilcox < 0.05)] #保留U检验P值小???0.05的变量，包括第一列label
+  data.test <-data.test[,which(wilcox < 0.05)]
+  label.trn <- data.trn$label
+  label.trn
+  #path.trn <- data.trn$path
+  feat.trn <- data.trn[,2:length(data.trn)]#改原来是2
+  feat.trn <- data.matrix(feat.trn)
+  label.test <- data.test$label
+  label.test
+  feat.test <- data.test[,2:length(data.test)]#改原来是2
+  feat.test <- data.matrix(feat.test)
+  varnames <- colnames(feat.trn)
+  
+  #标准化
+  train.mean <- apply(feat.trn,2,mean) # 标准化特征???
+  train.sd <- apply(feat.trn,2,sd)
+  feat.trn <- scale(feat.trn, center = TRUE, scale = TRUE)
+  feat.test <- scale(feat.test, center = train.mean,scale = train.sd)
+  #write.xlsx(feat.trn,'D:\\Postgraduate\\Ying Fan\\Three_model\\EGFR_model_952\\EGFR_feat.trn.xlsx')
+  #write.xlsx(feat.test,'D:\\Postgraduate\\Ying Fan\\Three_model\\EGFR_model_952\\EGFR_feat.test.xlsx')
+  
+  
+  #write.xlsx(data.trn,'D:\\Postgraduate\\Ying Fan\\Three_model\\EGFR_model_952\\data.trn.xlsx')
+  #write.xlsx(data.test,'D:\\Postgraduate\\Ying Fan\\Three_model\\EGFR_model_952\\data.test.xlsx')
+  
+  #交叉验证的划分集合是random的，如果想固定值，在cv.glmnet这句前加set.seed()
+  
+  
+  # for (i in 7){
+  set.seed(7)
+  cvmodel = cv.glmnet(feat.trn, label.trn, family = "binomial", 
+                      type.measure = "auc",nfolds=10,alpha=1) # nfold尝试改变
+  # plot(cvmodel)
+  # 
+  # s="lambda.min" 或??? s="lambda.1se"
+  #score.trn <- predict(cvmodel, newx= feat.trn, type="link", s="lambda.1se")
+  #score.test <- predict(cvmodel, newx= feat.test, type="link", s="lambda.1se")
+  plot(cvmodel,cex.axis=1.5, cex.lab=2)
+  #}
+  fit = glmnet(feat.trn, label.trn, family = "binomial",  nlambda=50, alpha=1) 
+  plot(fit, xvar="lambda", cex.axis=1.5, cex.lab=2)
+  # plot(fit, xvar="lambda")
+  abline(v= log(cvmodel$lambda.1se))
+  
+  # cvmodel$lambda.min  #最佳lambda???
+  # # cvmodel$lambda.1se
+  # fit<-glmnet(feat.trn, label.trn,family="binomial")
+  # plot(fit,xlab='lambda')
+  coefficients<-coef(cvmodel,s=cvmodel$lambda.1se) 
+  # 通过指定 λ 值，抓取出某一个模型的系数
+  
+  Active.Index<-which(coefficients!=0) #系数不为0的特征索引，第一个是截距常数
+  Active.coefficients<-coefficients[Active.Index]   #系数不为0的特征系数???
+  # 根据列数保存剩余特征，务必确保第一列是label，第二列就是特征
+  print(Active.coefficients)
+  lasso.trn = data.trn[(Active.Index)]#拿出来第一列label ，第二列特征
+  lasso.test = data.test[(Active.Index)]
+  
+  #write.xlsx(lasso.trn,'D:\\DESK\\ding\\lc_lasso_trn.xlsx')
+  #write.xlsx(lasso.test,'D:\\DESK\\ding\\lc_lasso_test.xlsx')
+  
+  
+  model.null = glm(label ~ 1,  ####logistic挑选特???
+                   data=lasso.trn,
+                   family = binomial(link="logit") )
+  
+  model.full = glm(label ~ .,
+                   data=lasso.trn,
+                   family = binomial(link="logit") )
+  
+  logit_model <- step(model.null,         #logistic挑选特???  根据AIC???  越小越好
+                      scope = list(upper=model.full),
+                      direction="both",
+                      # test="Chisq",
+                      data=lasso.trn)
+  
+  logit_model= glm( logit_model$formula, data = lasso.trn, ####拟合logistic model
+                    family=binomial(link="logit"))
+  summary(logit_model)
+  lasso.trn 
+  # AIC.trn
+  print(logit_model$coefficients)
+  coefficients<-coef(logit_model)
+  # coefficients<-coef(logit_model,s=logit_model$lambda.1se) 
+  print(coefficients)
+  #  write.xlsx(t(coefficients),"H:\\SJX\\Data\\caoran\\T1AIC系数和特???.xlsx") #paste0(path_sub,"\\AIC特征和系???.xlsx")  路径
+  coefficients= data.frame(t(coefficients))
+  # t(coefficients)
+  coe= colnames(coefficients[,1:length(coefficients)])
+  coe
+  lassoname = colnames(lasso.trn[,1:length(lasso.trn)])
+  lassoname
+  AIC.Index <- match( coe,lassoname)
+  print(AIC.Index)
+  bad <- is.na(AIC.Index)
+  print(bad)
+  AIC.Index[!bad]
+  # AIC.Index<-which(coefficients!=0) #系数不为0的特征索引，第一个是截距常数
+  AIC.trn = lasso.trn[AIC.Index[!bad]]#拿出来第一列label ，第二列特征
+  AIC.test = lasso.test[AIC.Index[!bad]]
+  
+  #write.xlsx(cbind(AIC.trn),"C:\\Users\\Administrator\\Desktop\\Aliyun\\EGFR_model\\AIC系数和特征trn.xlsx.xlsx") #E:\\EC\\T1AIC系数和特征trn156.xlsx") #生成测试集表???
+  #write.xlsx(cbind(AIC.test),"C:\\Users\\Administrator\\Desktop\\Aliyun\\EGFR_model\\AIC系数和特征test.xlsx.xlsx") #生成测试集表???
+  #write.xlsx(cbind(AIC.trn),paste0(path_sub,"\\radscore_trn_xiugai.xlsx")) #生成测试集表???
+  print("----------输出筛选的特征--------------")
+  print(logit_model$coefficients)
+  print("----------结束筛选特征----------------")
+  
+  
+  
+  score.trn=predict.glm(logit_model,newdata = lasso.trn, type="link")
+  score.test=predict.glm(logit_model,newdata = lasso.test, type="link")
+  radscore.test=predict.glm(logit_model,newdata = lasso.test, type="link")
+  radscore.test
+  radunitscore.test=predict.glm(logit_model,newdata = lasso.test, type="terms")
+  radunitscore.test
+  #write.xlsx(score.trn,'D:\\DESK\\ding\\lc_score_trn.xlsx')
+  #write.xlsx(score.test,'D:\\DESK\\ding\\lc_score_test.xlsx')
+  print(score.trn)
+  print(score.test)
+  auc.trn <- roc(label.trn,score.trn)
+  auc.trn$auc
+  
+  
+  plot(auc.trn, print.auc=TRUE, auc.polygon=TRUE,legacy.axes=TRUE, grid=c(0.1, 0.2), 
+       grid.col=c("green", "red"), max.auc.polygon=TRUE, xlab = '训练???',
+       auc.polygon.col="skyblue", print.thres=TRUE)  
+  
+  aaaa <- data.frame(c( score.test))
+  aaaa
+  label.test
+  auc.test <- roc(label.test, score.test)
+  auc.test$auc
+  plot(auc.test, print.auc=TRUE, auc.polygon=TRUE,legacy.axes=TRUE, grid=c(0.1, 0.2), 
+       grid.col=c("green", "red"), max.auc.polygon=TRUE, xlab = '测试???',
+       auc.polygon.col="skyblue", print.thres=TRUE)  
+  
+  
+  #计算acc
+  
+  train_pre_dot=predict(logit_model,newdata = data.trn,type="link")
+  predict=ifelse(train_pre_dot > threshold,1,0)
+  data.trn$train_pre_dot = train_pre_dot
+  data.trn$predict = predict
+  error=data.trn$predict - data.trn$label
+  #判断正确的数量占总数的比??? 
+  train_acc=(nrow(data.trn)-sum(abs(error)))/nrow(data.trn)
+  
+  
+  test_pre_dot=predict(logit_model,newdata = data.test,type="link")
+  predict=ifelse(test_pre_dot > threshold,1,0)
+  data.test$test_pre_dot = test_pre_dot
+  data.test$predict=predict
+  error=data.test$predict - data.test$label
+  #判断正确的数量占总数的比??? 
+  test_acc=(nrow(data.test)-sum(abs(error)))/nrow(data.test)
+  
+  print(train_acc)
+  print(test_acc)
+  
+  
+  #计算95%可信区间
+  ci.auc(auc.trn)
+  ci.auc(auc.test) 
+  print(ci.auc(auc.trn)) 
+  print(ci.auc(auc.test))
+  
+  train.index = auc.trn$sensitivities + auc.trn$specificities
+  train.max.index = which( train.index == max(train.index) )
+  auc.trn$specificities[train.max.index]
+  auc.trn$sensitivities[train.max.index]
+  
+  test.index = auc.test$sensitivities + auc.test$specificities
+  test.max.index = which(test.index == max(test.index))
+  auc.test$specificities[test.max.index]
+  auc.test$sensitivities[test.max.index]
+  
+  list1[seednum] = seednum
+  list2[seednum] = auc.trn$auc
+  list3[seednum] = auc.trn$specificities[train.max.index]
+  list4[seednum] = auc.trn$sensitivities[train.max.index]
+  list5[seednum] = auc.test$auc
+  list6[seednum] = auc.test$specificities[test.max.index]
+  list7[seednum] = auc.test$sensitivities[test.max.index]
+}
+
+list1 = ldply(list1)
+list2 = ldply(list2)
+list3 = ldply(list3)
+list4 = ldply(list4)
+list5 = ldply(list5)
+list6 = ldply(list6)
+list7 = ldply(list7)
+
+save.frame <- data.frame(list1,list2,list3,list4,list5,list6,list7)
+colnames(save.frame) = c("seednum","训练集AUC","trn_spe","trn_sen","测试集AUC","test_spe","test_sen")
+
+write.xlsx(save.frame,'D:\\DESK\\geng\\zhou_5000.xlsx') # 所有的结果
